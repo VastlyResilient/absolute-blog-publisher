@@ -16,6 +16,7 @@ const WP_AUTH = 'Basic ' + Buffer.from('admin:' + (process.env.WP_APP_PASSWORD |
 
 // ET fire times: [hour, minute] in ET (handles DST via Intl)
 const FIRE_TIMES_ET = [
+  [19, 36], // temp test slot — remove after April 14 2026
   [7, 0],
   [13, 0],
   [20, 46]
