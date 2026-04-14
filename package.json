@@ -1,0 +1,12 @@
+{
+  "name": "blog-cron-publisher",
+  "version": "1.0.0",
+  "description": "Absolute Transportation blog auto-publisher",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
