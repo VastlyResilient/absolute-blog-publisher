@@ -162,11 +162,32 @@ function getETHourMinute() {
   return [d.getHours(), d.getMinutes()];
 }
 
+// Returns slot index (0=morning, 1=afternoon, 2=evening) based on ET hour
+function getSlot(h) {
+  if (h < 12) return 0;
+  if (h < 17) return 1;
+  return 2;
+}
+
 // ---- publisher ----
 
-async function publish() {
-  const topicData = TOPICS[Math.floor(Date.now() / 86400000) % TOPICS.length];
-  console.log(`[${new Date().toISOString()}] PUBLISHING: ${topicData.topic}`);
+async function publish(slotIndex) {
+  // Pick topic: day * 3 + slot gives a unique topic per fire per day
+  const dayNum = Math.floor(Date.now() / 86400000);
+  const topicData = TOPICS[(dayNum * 3 + slotIndex) % TOPICS.length];
+  console.log(`[${new Date().toISOString()}] PUBLISHING (slot ${slotIndex}): ${topicData.topic}`);
+
+  // Dedup: skip if a post was published in the last 25 minutes (rolling restart protection)
+  const since = new Date(Date.now() - 25 * 60 * 1000).toISOString();
+  const recentCheck = await apiCall({
+    hostname: WP_URL, method: 'GET',
+    path: '/wp-json/wp/v2/posts?status=publish&after=' + encodeURIComponent(since) + '&per_page=1',
+    headers: {'Authorization': WP_AUTH}
+  });
+  if (Array.isArray(recentCheck.body) && recentCheck.body.length > 0) {
+    console.log(`[SKIP] Post already published in last 25 min (ID ${recentCheck.body[0].id}) — duplicate container guard triggered`);
+    return;
+  }
 
   if (!ANTHROPIC_KEY) { console.error('ANTHROPIC_API_KEY not set'); return; }
 
@@ -279,8 +300,9 @@ function checkAndFire() {
       const key = `${h}:${String(m).padStart(2,'0')}-${new Date().toISOString().slice(0,10)}`;
       if (key !== lastFiredKey) {
         lastFiredKey = key;
-        console.log(`[CRON] Firing at ET ${h}:${String(m).padStart(2,'0')} (key=${key})`);
-        publish().catch(e => console.error('Publish error:', e.message));
+        const slot = getSlot(h);
+        console.log(`[CRON] Firing at ET ${h}:${String(m).padStart(2,'0')} slot=${slot} (key=${key})`);
+        publish(slot).catch(e => console.error('Publish error:', e.message));
       }
       return;
     }
