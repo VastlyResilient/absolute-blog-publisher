@@ -237,7 +237,7 @@ Return ONLY valid JSON (no markdown fences):
   console.log('✓ Claude: "'+parsed.title+'" | faq='+(parsed.faqItems||[]).length);
 
   // Schemas
-  const featuredImg = {"@type":"ImageObject","url":"https://wordpress-production-91c8.up.railway.app/wp-content/uploads/absolute-transportation-featured.jpg","width":1200,"height":630};
+  const featuredImg = {"@type":"ImageObject","url":"https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/03/IMG_1124_edited-scaled.jpg","width":1200,"height":630};
   const articleSchema = {"@context":"https://schema.org","@type":"Article","headline":parsed.title,"description":parsed.metaDescription,"image":featuredImg,"author":{"@type":"Organization","name":"Absolute Transportation","url":"https://www.absolute-transportation.com"},"publisher":{"@type":"Organization","name":"Absolute Transportation","logo":{"@type":"ImageObject","url":"https://www.absolute-transportation.com/logo.png"}},"datePublished":new Date().toISOString().split('T')[0],"dateModified":new Date().toISOString().split('T')[0]};
   const faqSchema = (parsed.faqItems||[]).length ? {"@context":"https://schema.org","@type":"FAQPage","mainEntity":(parsed.faqItems||[]).map(f=>({"@type":"Question","name":f.question,"acceptedAnswer":{"@type":"Answer","text":f.answer}}))} : null;
   const lbSchema = {"@context":"https://schema.org","@type":"TaxiService","name":"Absolute Transportation","url":"https://www.absolute-transportation.com","telephone":"+1-203-938-2000","address":{"@type":"PostalAddress","addressLocality":"North Haven","addressRegion":"CT","postalCode":"06473","addressCountry":"US"},"areaServed":["Connecticut","New Haven County","Fairfield County","Hartford County"],"openingHours":"Mo-Su 00:00-23:59","priceRange":"$$"};
@@ -250,7 +250,7 @@ Return ONLY valid JSON (no markdown fences):
   if (!content.includes('wp-image-47')) {
     const h1End = content.indexOf('</h1>');
     if (h1End !== -1) {
-      const img = '\n<figure class="wp-block-image size-large"><img src="https://wordpress-production-91c8.up.railway.app/wp-content/uploads/absolute-transportation-featured.jpg" alt="'+parsed.title+'" class="wp-image-47" /></figure>\n';
+      const img = '\n<figure class="wp-block-image size-large"><img src="https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/03/IMG_1124_edited-scaled.jpg" alt="'+parsed.title+'" class="wp-image-47" /></figure>\n';
       content = content.slice(0,h1End+5)+img+content.slice(h1End+5);
     }
   }
