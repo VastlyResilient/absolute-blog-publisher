@@ -14,6 +14,47 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const WP_URL = 'wordpress-production-91c8.up.railway.app';
 const WP_AUTH = 'Basic ' + Buffer.from('admin:' + (process.env.WP_APP_PASSWORD || 'nhbn 3BcS 1sg9 Exzx UzG7 9nwf')).toString('base64');
 
+// Rotating photo pool (37 JPGs, IDs 1586–1622)
+const PHOTOS = [
+  {id:1586,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1906-scaled.jpg'},
+  {id:1587,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1917-scaled.jpg'},
+  {id:1588,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1920-scaled.jpg'},
+  {id:1589,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1927-scaled.jpg'},
+  {id:1590,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1928-scaled.jpg'},
+  {id:1591,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1929-scaled.jpg'},
+  {id:1592,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/2B3A1937-scaled.jpg'},
+  {id:1593,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1102-scaled.jpg'},
+  {id:1594,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1103-scaled.jpg'},
+  {id:1595,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1104-scaled.jpg'},
+  {id:1596,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1105-scaled.jpg'},
+  {id:1597,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1106-scaled.jpg'},
+  {id:1598,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1107-scaled.jpg'},
+  {id:1599,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1108-scaled.jpg'},
+  {id:1600,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1109-scaled.jpg'},
+  {id:1601,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1110-scaled.jpg'},
+  {id:1602,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1111-scaled.jpg'},
+  {id:1603,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1112-scaled.jpg'},
+  {id:1604,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1114-scaled.jpg'},
+  {id:1605,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1115-scaled.jpg'},
+  {id:1606,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1116-scaled.jpg'},
+  {id:1607,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1118-scaled.jpg'},
+  {id:1608,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1119-scaled.jpg'},
+  {id:1609,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1120-scaled.jpg'},
+  {id:1610,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1121-scaled.jpg'},
+  {id:1611,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1122-scaled.jpg'},
+  {id:1612,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1123-scaled.jpg'},
+  {id:1613,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1124-scaled.jpg'},
+  {id:1614,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1126-scaled.jpg'},
+  {id:1615,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1127-scaled.jpg'},
+  {id:1616,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1128-scaled.jpg'},
+  {id:1617,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1130-scaled.jpg'},
+  {id:1618,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1132-scaled.jpg'},
+  {id:1619,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1133-scaled.jpg'},
+  {id:1620,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1134-scaled.jpg'},
+  {id:1621,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1135-scaled.jpg'},
+  {id:1622,url:'https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/04/IMG_1137-scaled.jpg'},
+];
+
 // ET fire times: [hour, minute] in ET (handles DST via Intl)
 const FIRE_TIMES_ET = [
   [7, 0],
@@ -175,6 +216,7 @@ async function publish(slotIndex) {
   // Pick topic: day * 3 + slot gives a unique topic per fire per day
   const dayNum = Math.floor(Date.now() / 86400000);
   const topicData = TOPICS[(dayNum * 3 + slotIndex) % TOPICS.length];
+  const photo = PHOTOS[(dayNum * 3 + slotIndex) % PHOTOS.length];
   console.log(`[${new Date().toISOString()}] PUBLISHING (slot ${slotIndex}): ${topicData.topic}`);
 
   // Dedup: skip if a post was published in the last 25 minutes (rolling restart protection)
@@ -237,7 +279,7 @@ Return ONLY valid JSON (no markdown fences):
   console.log('✓ Claude: "'+parsed.title+'" | faq='+(parsed.faqItems||[]).length);
 
   // Schemas
-  const featuredImg = {"@type":"ImageObject","url":"https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/03/IMG_1124_edited-scaled.jpg","width":1200,"height":630};
+  const featuredImg = {"@type":"ImageObject","url":photo.url,"width":1200,"height":630};
   const articleSchema = {"@context":"https://schema.org","@type":"Article","headline":parsed.title,"description":parsed.metaDescription,"image":featuredImg,"author":{"@type":"Organization","name":"Absolute Transportation","url":"https://www.absolute-transportation.com"},"publisher":{"@type":"Organization","name":"Absolute Transportation","logo":{"@type":"ImageObject","url":"https://www.absolute-transportation.com/logo.png"}},"datePublished":new Date().toISOString().split('T')[0],"dateModified":new Date().toISOString().split('T')[0]};
   const faqSchema = (parsed.faqItems||[]).length ? {"@context":"https://schema.org","@type":"FAQPage","mainEntity":(parsed.faqItems||[]).map(f=>({"@type":"Question","name":f.question,"acceptedAnswer":{"@type":"Answer","text":f.answer}}))} : null;
   const lbSchema = {"@context":"https://schema.org","@type":"TaxiService","name":"Absolute Transportation","url":"https://www.absolute-transportation.com","telephone":"+1-203-938-2000","address":{"@type":"PostalAddress","addressLocality":"North Haven","addressRegion":"CT","postalCode":"06473","addressCountry":"US"},"areaServed":["Connecticut","New Haven County","Fairfield County","Hartford County"],"openingHours":"Mo-Su 00:00-23:59","priceRange":"$$"};
@@ -247,10 +289,10 @@ Return ONLY valid JSON (no markdown fences):
     .replace(/\{\{CITY_PAGE_LINK\}\}/g,'https://www.absolute-transportation.com/service-areas')
     .replace(/\{\{BOOKING_LINK\}\}/g,'https://www.absolute-transportation.com/contact');
 
-  if (!content.includes('wp-image-47')) {
+  if (!content.includes('wp-image-'+photo.id)) {
     const h1End = content.indexOf('</h1>');
     if (h1End !== -1) {
-      const img = '\n<figure class="wp-block-image size-large"><img src="https://wordpress-production-91c8.up.railway.app/wp-content/uploads/2026/03/IMG_1124_edited-scaled.jpg" alt="'+parsed.title+'" class="wp-image-47" /></figure>\n';
+      const img = '\n<figure class="wp-block-image size-large"><img src="'+photo.url+'" alt="'+parsed.title+'" class="wp-image-'+photo.id+'" /></figure>\n';
       content = content.slice(0,h1End+5)+img+content.slice(h1End+5);
     }
   }
@@ -276,7 +318,7 @@ Return ONLY valid JSON (no markdown fences):
   const wpPayload = JSON.stringify({
     title:parsed.title, content:finalContent, status:'publish',
     slug:parsed.slug, excerpt:parsed.metaDescription,
-    categories:[wpCatId], featured_media:47
+    categories:[wpCatId], featured_media:photo.id
   });
   const wpr = await apiCall({
     hostname:WP_URL, path:'/wp-json/wp/v2/posts', method:'POST',
