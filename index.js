@@ -9,58 +9,6 @@
  */
 
 const https = require('https');
-const { Pool } = require('pg');
-
-// PostgreSQL distributed lock — prevents duplicate posts during Railway rolling restarts
-const DB_URL = (process.env.DATABASE_URL || 'postgresql://n8n:n8npass2026@ballast.proxy.rlwy.net:36206/n8ndb')
-  + (process.env.DATABASE_URL ? '' : '?connect_timeout=5');
-const pool = new Pool({
-  connectionString: DB_URL,
-  ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 6000,
-  idleTimeoutMillis: 30000,
-  max: 3
-});
-
-let dbReady = false;
-
-async function withTimeout(promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
-  });
-}
-
-async function initDb() {
-  console.log('Connecting to PostgreSQL...');
-  await withTimeout(pool.query(`
-    CREATE TABLE IF NOT EXISTS publish_locks (
-      slot_key VARCHAR(40) PRIMARY KEY,
-      locked_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `), 8000, 'initDb CREATE TABLE');
-  await pool.query(`DELETE FROM publish_locks WHERE locked_at < NOW() - INTERVAL '2 hours'`);
-  dbReady = true;
-  console.log('DB lock table ready');
-}
-
-// Atomic lock: returns true if this container wins the slot, false if another already has it
-async function acquireLock(slotKey) {
-  if (!dbReady) {
-    console.warn('[LOCK] DB not ready, skipping lock check — WP dedup fallback active');
-    return true; // let WP dedup guard handle it below
-  }
-  try {
-    const result = await pool.query(
-      `INSERT INTO publish_locks (slot_key) VALUES ($1) ON CONFLICT (slot_key) DO NOTHING`,
-      [slotKey]
-    );
-    return result.rowCount === 1;
-  } catch (e) {
-    console.error('Lock query error:', e.message, '— falling back to WP dedup');
-    return true;
-  }
-}
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const WP_URL = 'wordpress-production-91c8.up.railway.app';
@@ -271,26 +219,22 @@ async function publish(slotIndex) {
   const photo = PHOTOS[(dayNum * 3 + slotIndex) % PHOTOS.length];
   console.log(`[${new Date().toISOString()}] PUBLISHING (slot ${slotIndex}): ${topicData.topic}`);
 
-  // Primary guard: distributed DB lock (atomic, works across containers)
-  const slotKey = `${new Date().toISOString().slice(0,10)}-slot${slotIndex}`;
-  const won = await acquireLock(slotKey);
-  if (!won) {
-    console.log(`[SKIP] Lock already held for ${slotKey} — another container won`);
-    return;
-  }
-  console.log(`[LOCK] Acquired lock for ${slotKey}`);
+  // Distributed lock via WP draft semaphore — atomic across Railway containers
+  // Create a draft post with a unique slot title. WP enforces unique slugs on create,
+  // so only ONE container gets a 201; the other sees the slot is taken and skips.
+  const slotKey = `__lock-${new Date().toISOString().slice(0,10)}-slot${slotIndex}`;
+  const lockPayload = JSON.stringify({ title: slotKey, status: 'draft', slug: slotKey });
+  const lockRes = await apiCall({
+    hostname: WP_URL, path: '/wp-json/wp/v2/posts', method: 'POST',
+    headers: { 'Authorization': WP_AUTH, 'Content-Type': 'application/json', 'content-length': Buffer.byteLength(lockPayload) }
+  }, lockPayload);
 
-  // Secondary guard: WP dedup (catches edge case when DB lock fell back to true)
-  const since = new Date(Date.now() - 25 * 60 * 1000).toISOString();
-  const recentCheck = await apiCall({
-    hostname: WP_URL, method: 'GET',
-    path: '/wp-json/wp/v2/posts?status=publish&after=' + encodeURIComponent(since) + '&per_page=1',
-    headers: {'Authorization': WP_AUTH}
-  });
-  if (Array.isArray(recentCheck.body) && recentCheck.body.length > 0) {
-    console.log(`[SKIP] WP dedup: post ID ${recentCheck.body[0].id} published in last 25 min`);
+  if (lockRes.status !== 201) {
+    console.log(`[SKIP] Lock already held for ${slotKey} (WP returned ${lockRes.status}) — another container won`);
     return;
   }
+  const lockPostId = lockRes.body.id;
+  console.log(`[LOCK] Semaphore acquired (draft ID ${lockPostId}) for ${slotKey}`);
 
   if (!ANTHROPIC_KEY) { console.error('ANTHROPIC_API_KEY not set'); return; }
 
@@ -391,6 +335,14 @@ Return ONLY valid JSON (no markdown fences):
   } else {
     console.error('WP publish failed:', wpr.status, JSON.stringify(wpr.body).slice(0,300));
   }
+
+  // Clean up semaphore draft
+  if (lockPostId) {
+    await apiCall({
+      hostname: WP_URL, path: `/wp-json/wp/v2/posts/${lockPostId}?force=true`, method: 'DELETE',
+      headers: { 'Authorization': WP_AUTH }
+    }).catch(() => {});
+  }
 }
 
 // ---- scheduler ----
@@ -415,13 +367,5 @@ function checkAndFire() {
 
 console.log(`[${new Date().toISOString()}] Blog cron publisher started. Fires at 7:00, 13:00, 20:46 ET.`);
 console.log(`ANTHROPIC_API_KEY set: ${!!ANTHROPIC_KEY}`);
-initDb()
-  .then(() => {
-    checkAndFire(); // check immediately on startup
-    setInterval(checkAndFire, 60 * 1000);
-  })
-  .catch(e => {
-    console.error('DB init failed, starting without lock (fallback):', e.message);
-    checkAndFire();
-    setInterval(checkAndFire, 60 * 1000);
-  });
+checkAndFire();
+setInterval(checkAndFire, 60 * 1000);
