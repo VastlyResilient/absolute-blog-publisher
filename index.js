@@ -9,6 +9,37 @@
  */
 
 const https = require('https');
+const { Pool } = require('pg');
+
+// PostgreSQL distributed lock — prevents duplicate posts during Railway rolling restarts
+const DB_URL = process.env.DATABASE_URL || 'postgresql://n8n:n8npass2026@ballast.proxy.rlwy.net:36206/n8ndb';
+const pool = new Pool({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } });
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS publish_locks (
+      slot_key VARCHAR(40) PRIMARY KEY,
+      locked_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  // Clean up locks older than 2 hours to keep table lean
+  await pool.query(`DELETE FROM publish_locks WHERE locked_at < NOW() - INTERVAL '2 hours'`);
+  console.log('DB lock table ready');
+}
+
+// Returns true if this process won the lock for this slot (atomic, safe across containers)
+async function acquireLock(slotKey) {
+  try {
+    const result = await pool.query(
+      `INSERT INTO publish_locks (slot_key) VALUES ($1) ON CONFLICT (slot_key) DO NOTHING`,
+      [slotKey]
+    );
+    return result.rowCount === 1; // 1 = we inserted = we won; 0 = already locked
+  } catch (e) {
+    console.error('Lock error:', e.message);
+    return false;
+  }
+}
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const WP_URL = 'wordpress-production-91c8.up.railway.app';
@@ -219,17 +250,14 @@ async function publish(slotIndex) {
   const photo = PHOTOS[(dayNum * 3 + slotIndex) % PHOTOS.length];
   console.log(`[${new Date().toISOString()}] PUBLISHING (slot ${slotIndex}): ${topicData.topic}`);
 
-  // Dedup: skip if a post was published in the last 25 minutes (rolling restart protection)
-  const since = new Date(Date.now() - 25 * 60 * 1000).toISOString();
-  const recentCheck = await apiCall({
-    hostname: WP_URL, method: 'GET',
-    path: '/wp-json/wp/v2/posts?status=publish&after=' + encodeURIComponent(since) + '&per_page=1',
-    headers: {'Authorization': WP_AUTH}
-  });
-  if (Array.isArray(recentCheck.body) && recentCheck.body.length > 0) {
-    console.log(`[SKIP] Post already published in last 25 min (ID ${recentCheck.body[0].id}) — duplicate container guard triggered`);
+  // Distributed lock: atomic INSERT ensures only one container publishes per slot
+  const slotKey = `${new Date().toISOString().slice(0,10)}-slot${slotIndex}`;
+  const won = await acquireLock(slotKey);
+  if (!won) {
+    console.log(`[SKIP] Lock already held for ${slotKey} — another container is publishing`);
     return;
   }
+  console.log(`[LOCK] Acquired lock for ${slotKey}`);
 
   if (!ANTHROPIC_KEY) { console.error('ANTHROPIC_API_KEY not set'); return; }
 
@@ -354,5 +382,13 @@ function checkAndFire() {
 
 console.log(`[${new Date().toISOString()}] Blog cron publisher started. Fires at 7:00, 13:00, 20:46 ET.`);
 console.log(`ANTHROPIC_API_KEY set: ${!!ANTHROPIC_KEY}`);
-checkAndFire(); // check immediately on startup
-setInterval(checkAndFire, 60 * 1000);
+initDb()
+  .then(() => {
+    checkAndFire(); // check immediately on startup
+    setInterval(checkAndFire, 60 * 1000);
+  })
+  .catch(e => {
+    console.error('DB init failed, starting without lock (fallback):', e.message);
+    checkAndFire();
+    setInterval(checkAndFire, 60 * 1000);
+  });
