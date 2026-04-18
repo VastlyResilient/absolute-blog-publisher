@@ -12,24 +12,33 @@ const https = require('https');
 const { Pool } = require('pg');
 
 // PostgreSQL distributed lock — prevents duplicate posts during Railway rolling restarts
-const DB_URL = process.env.DATABASE_URL || 'postgresql://n8n:n8npass2026@ballast.proxy.rlwy.net:36206/n8ndb';
+const DB_URL = (process.env.DATABASE_URL || 'postgresql://n8n:n8npass2026@ballast.proxy.rlwy.net:36206/n8ndb')
+  + (process.env.DATABASE_URL ? '' : '?connect_timeout=5');
 const pool = new Pool({
   connectionString: DB_URL,
   ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 6000,
   idleTimeoutMillis: 30000,
   max: 3
 });
 
 let dbReady = false;
 
+async function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+
 async function initDb() {
-  await pool.query(`
+  console.log('Connecting to PostgreSQL...');
+  await withTimeout(pool.query(`
     CREATE TABLE IF NOT EXISTS publish_locks (
       slot_key VARCHAR(40) PRIMARY KEY,
       locked_at TIMESTAMPTZ DEFAULT NOW()
     )
-  `);
+  `), 8000, 'initDb CREATE TABLE');
   await pool.query(`DELETE FROM publish_locks WHERE locked_at < NOW() - INTERVAL '2 hours'`);
   dbReady = true;
   console.log('DB lock table ready');
