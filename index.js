@@ -13,7 +13,15 @@ const { Pool } = require('pg');
 
 // PostgreSQL distributed lock — prevents duplicate posts during Railway rolling restarts
 const DB_URL = process.env.DATABASE_URL || 'postgresql://n8n:n8npass2026@ballast.proxy.rlwy.net:36206/n8ndb';
-const pool = new Pool({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } });
+const pool = new Pool({
+  connectionString: DB_URL,
+  ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
+  max: 3
+});
+
+let dbReady = false;
 
 async function initDb() {
   await pool.query(`
@@ -22,22 +30,26 @@ async function initDb() {
       locked_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  // Clean up locks older than 2 hours to keep table lean
   await pool.query(`DELETE FROM publish_locks WHERE locked_at < NOW() - INTERVAL '2 hours'`);
+  dbReady = true;
   console.log('DB lock table ready');
 }
 
-// Returns true if this process won the lock for this slot (atomic, safe across containers)
+// Atomic lock: returns true if this container wins the slot, false if another already has it
 async function acquireLock(slotKey) {
+  if (!dbReady) {
+    console.warn('[LOCK] DB not ready, skipping lock check — WP dedup fallback active');
+    return true; // let WP dedup guard handle it below
+  }
   try {
     const result = await pool.query(
       `INSERT INTO publish_locks (slot_key) VALUES ($1) ON CONFLICT (slot_key) DO NOTHING`,
       [slotKey]
     );
-    return result.rowCount === 1; // 1 = we inserted = we won; 0 = already locked
+    return result.rowCount === 1;
   } catch (e) {
-    console.error('Lock error:', e.message);
-    return false;
+    console.error('Lock query error:', e.message, '— falling back to WP dedup');
+    return true;
   }
 }
 
@@ -250,14 +262,26 @@ async function publish(slotIndex) {
   const photo = PHOTOS[(dayNum * 3 + slotIndex) % PHOTOS.length];
   console.log(`[${new Date().toISOString()}] PUBLISHING (slot ${slotIndex}): ${topicData.topic}`);
 
-  // Distributed lock: atomic INSERT ensures only one container publishes per slot
+  // Primary guard: distributed DB lock (atomic, works across containers)
   const slotKey = `${new Date().toISOString().slice(0,10)}-slot${slotIndex}`;
   const won = await acquireLock(slotKey);
   if (!won) {
-    console.log(`[SKIP] Lock already held for ${slotKey} — another container is publishing`);
+    console.log(`[SKIP] Lock already held for ${slotKey} — another container won`);
     return;
   }
   console.log(`[LOCK] Acquired lock for ${slotKey}`);
+
+  // Secondary guard: WP dedup (catches edge case when DB lock fell back to true)
+  const since = new Date(Date.now() - 25 * 60 * 1000).toISOString();
+  const recentCheck = await apiCall({
+    hostname: WP_URL, method: 'GET',
+    path: '/wp-json/wp/v2/posts?status=publish&after=' + encodeURIComponent(since) + '&per_page=1',
+    headers: {'Authorization': WP_AUTH}
+  });
+  if (Array.isArray(recentCheck.body) && recentCheck.body.length > 0) {
+    console.log(`[SKIP] WP dedup: post ID ${recentCheck.body[0].id} published in last 25 min`);
+    return;
+  }
 
   if (!ANTHROPIC_KEY) { console.error('ANTHROPIC_API_KEY not set'); return; }
 
