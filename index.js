@@ -219,22 +219,46 @@ async function publish(slotIndex) {
   const photo = PHOTOS[(dayNum * 3 + slotIndex) % PHOTOS.length];
   console.log(`[${new Date().toISOString()}] PUBLISHING (slot ${slotIndex}): ${topicData.topic}`);
 
-  // Distributed lock via WP draft semaphore — atomic across Railway containers
-  // Create a draft post with a unique slot title. WP enforces unique slugs on create,
-  // so only ONE container gets a 201; the other sees the slot is taken and skips.
+  // Distributed lock: both containers race to create a draft with the same title.
+  // WP assigns auto-incrementing IDs — lowest ID wins. We wait 3s then compare.
   const slotKey = `__lock-${new Date().toISOString().slice(0,10)}-slot${slotIndex}`;
-  const lockPayload = JSON.stringify({ title: slotKey, status: 'draft', slug: slotKey });
+  const lockPayload = JSON.stringify({ title: slotKey, status: 'draft' });
   const lockRes = await apiCall({
     hostname: WP_URL, path: '/wp-json/wp/v2/posts', method: 'POST',
     headers: { 'Authorization': WP_AUTH, 'Content-Type': 'application/json', 'content-length': Buffer.byteLength(lockPayload) }
   }, lockPayload);
 
   if (lockRes.status !== 201) {
-    console.log(`[SKIP] Lock already held for ${slotKey} (WP returned ${lockRes.status}) — another container won`);
+    console.log(`[SKIP] Could not create lock draft (${lockRes.status}) — skipping`);
     return;
   }
-  const lockPostId = lockRes.body.id;
-  console.log(`[LOCK] Semaphore acquired (draft ID ${lockPostId}) for ${slotKey}`);
+  const myLockId = lockRes.body.id;
+  console.log(`[LOCK] Created draft ID ${myLockId} for ${slotKey}, waiting 4s to check for rivals...`);
+
+  // Wait 4s for any competing container to also create its lock draft
+  await new Promise(r => setTimeout(r, 4000));
+
+  // Find all lock drafts for this slot — lowest ID is the winner
+  const draftsRes = await apiCall({
+    hostname: WP_URL, method: 'GET',
+    path: `/wp-json/wp/v2/posts?status=draft&per_page=50&orderby=id&order=asc`,
+    headers: { 'Authorization': WP_AUTH }
+  });
+  const rivals = Array.isArray(draftsRes.body)
+    ? draftsRes.body.filter(p => (p.title?.raw || p.title?.rendered || '').includes(slotKey))
+    : [];
+  const winnerIdValue = rivals.length ? Math.min(...rivals.map(p => p.id)) : myLockId;
+
+  if (myLockId !== winnerIdValue) {
+    console.log(`[SKIP] Another container won (ID ${winnerIdValue} < mine ${myLockId}) — deleting my draft`);
+    await apiCall({
+      hostname: WP_URL, path: `/wp-json/wp/v2/posts/${myLockId}?force=true`, method: 'DELETE',
+      headers: { 'Authorization': WP_AUTH }
+    }).catch(() => {});
+    return;
+  }
+  console.log(`[LOCK] Won with lowest ID ${myLockId} — proceeding to publish`);
+  const lockPostId = myLockId;
 
   if (!ANTHROPIC_KEY) { console.error('ANTHROPIC_API_KEY not set'); return; }
 
