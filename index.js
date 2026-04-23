@@ -389,7 +389,23 @@ function checkAndFire() {
   }
 }
 
+// If this container starts during a fire minute, yield to the already-running container.
+// This eliminates rolling-restart duplicates without any external lock.
+function startScheduler() {
+  const [h, m] = getETHourMinute();
+  const duringFireMinute = FIRE_TIMES_ET.some(([fh, fm]) => fh === h && fm === m);
+  if (duringFireMinute) {
+    console.log(`[STARTUP] Started during fire window (${h}:${String(m).padStart(2,'0')} ET) — waiting 65s to yield to existing container`);
+    setTimeout(() => {
+      console.log('[STARTUP] Grace period over, starting scheduler');
+      setInterval(checkAndFire, 60 * 1000);
+    }, 65000);
+  } else {
+    checkAndFire();
+    setInterval(checkAndFire, 60 * 1000);
+  }
+}
+
 console.log(`[${new Date().toISOString()}] Blog cron publisher started. Fires at 7:00, 13:00, 20:46 ET.`);
 console.log(`ANTHROPIC_API_KEY set: ${!!ANTHROPIC_KEY}`);
-checkAndFire();
-setInterval(checkAndFire, 60 * 1000);
+startScheduler();
